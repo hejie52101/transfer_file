@@ -28,7 +28,7 @@ def wait_end(chan, mode="oper"):
     else:
         reg = r".*@.*#"
     while True:
-        if re.findall(reg, result[-15:]):
+        if re.findall(reg, result[-20:]):
             break
         else:
             time.sleep(1)
@@ -46,11 +46,11 @@ def ssh_stby(ip, username, password, ne_partition):
         sys.stdout.flush()
         # return 0
     chan = ssh.invoke_shell()
+    time.sleep(1)
+    chan.recv(9999999).decode()
     if username == "root":
         chan.send("lsh\n")
         chan, rst_lsh = wait_end(chan)
-    time.sleep(1)
-    chan.recv(9999999).decode()
     chan.send("\nshow chassis status|no-more\n")
     time.sleep(1)
     chan, rst_chassis = wait_end(chan)
@@ -156,11 +156,11 @@ def sftp_func(ip, username, password, local_path, clear_cfg):
         sys.stdout.flush()
         raise
     chan = ssh.invoke_shell()
+    time.sleep(1)
+    chan.recv(9999999).decode()
     if username == "root":
         chan.send("lsh\n")
         chan, rst_lsh = wait_end(chan)
-    time.sleep(1)
-    chan.recv(9999999).decode()
     chan.send("\nshow version|no-more\n")
     time.sleep(1)
     chan, rst_version = wait_end(chan)
