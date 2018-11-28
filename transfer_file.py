@@ -46,6 +46,9 @@ def ssh_stby(ip, username, password, ne_partition):
         sys.stdout.flush()
         # return 0
     chan = ssh.invoke_shell()
+    if username == "root":
+        chan.send("lsh\n")
+        chan, rst_lsh = wait_end(chan)
     time.sleep(1)
     chan.recv(9999999).decode()
     chan.send("\nshow chassis status|no-more\n")
@@ -73,7 +76,10 @@ def ssh_stby(ip, username, password, ne_partition):
     sys.stdout.flush()
     print("%s: Begin to execute copy to stby card..." % threading.current_thread().name)
     sys.stdout.flush()
-    chan.send("\nscp admin@169.254.1." + act_mcp + ":/sdboot/" + ne_partition + "/NPT*.bin /sdboot/" + ne_partition + "\n")
+    if username == "root":
+        chan.send("\nscp 169.254.1." + act_mcp + ":/sdboot/" + ne_partition + "/NPT*.bin /sdboot/" + ne_partition + "\n")
+    else:
+        chan.send("\nscp admin@169.254.1." + act_mcp + ":/sdboot/" + ne_partition + "/NPT*.bin /sdboot/" + ne_partition + "\n")
     time.sleep(1)
     rst_scp = ""
     print("%s: Coping to stby version..." % threading.current_thread().name)
@@ -94,7 +100,6 @@ def ssh_stby(ip, username, password, ne_partition):
             sys.stdout.flush()
     # print("%s: after scp: -----> %s" % (threading.current_thread().name, rst_scp))
     sys.stdout.flush()
-        
     print("%s: Copy to stby card finish" % threading.current_thread().name)
     sys.stdout.flush()
     print("%s: start to sync at stby mcp..." % threading.current_thread().name)
@@ -102,6 +107,7 @@ def ssh_stby(ip, username, password, ne_partition):
     chan.send("\nsync\n")
     time.sleep(1)
     chan, rst_sync = wait_end(chan, "shell")
+    ssh.close()
     print("%s: stby mcp sync success!" % threading.current_thread().name)
     sys.stdout.flush()
     return 1
@@ -150,6 +156,9 @@ def sftp_func(ip, username, password, local_path, clear_cfg):
         sys.stdout.flush()
         raise
     chan = ssh.invoke_shell()
+    if username == "root":
+        chan.send("lsh\n")
+        chan, rst_lsh = wait_end(chan)
     time.sleep(1)
     chan.recv(9999999).decode()
     chan.send("\nshow version|no-more\n")
@@ -167,13 +176,16 @@ def sftp_func(ip, username, password, local_path, clear_cfg):
         ne_partition = "up"
     else:
         ne_partition = "down"
-    # ne_type = re.findall(r"Ne.*\d{4}i?", rst_version)[0].split("-")[1]
-    ne_type = re.findall(r"Ne Type.*NPT-(\w*)", rst_version)[0]
+    if re.findall(r"Ne Type.*NPT-1800.*2\+0", rst_version):
+        ne_type = "1800_2p0"
+        localfile = os.path.join(local_path, re.findall(r"NPT1800_Emb_2p0_\d+\.bin", ", ".join(os.listdir(local_path)))[0])
+        remotefile = "/sdboot/" + ne_partition + "/NPT1800_Emb.bin"
+    else:
+        ne_type = re.findall(r"Ne Type.*NPT-(\w*)", rst_version)[0]
+        localfile = os.path.join(local_path, re.findall("NPT"+ne_type+r"_Emb_\d+\.bin", ", ".join(os.listdir(local_path)))[0])
+        remotefile = "/sdboot/" + ne_partition + "/NPT" + ne_type + "_Emb.bin"
     print("%s: ne_type: -----> %s" % (threading.current_thread().name, ne_type))
     sys.stdout.flush()
-    # localfile = os.path.join(local_path, "NPT" + ne_type + "_Emb_" + version.replace(".", "") + ".bin" )
-    localfile = os.path.join(local_path, re.findall("NPT"+ne_type+r"_Emb_\d+.bin", ", ".join(os.listdir(local_path)))[0])
-    remotefile = "/sdboot/" + ne_partition + "/NPT" + ne_type + "_Emb.bin"
     print("%s: localfile: -----> %s" % (threading.current_thread().name, localfile))
     sys.stdout.flush()
     print("%s: remotefile: -----> %s" % (threading.current_thread().name, remotefile))
@@ -228,7 +240,8 @@ def sftp_func(ip, username, password, local_path, clear_cfg):
         ssh.close()
         sys.exit()
     
-    ssh_stby(ip, username, password, ne_partition)
+    if ne_type != "1800_2p0":
+        ssh_stby(ip, username, password, ne_partition)
 
     try:
         ssh.connect(ip, 22, username, password)
@@ -264,8 +277,6 @@ def sftp_func(ip, username, password, local_path, clear_cfg):
 
         
 def sftp_thread(ip_list, username, password, version, clear_cfg):
-    # print "Run task main (%s)..." % (os.getpid())
-    sys.stdout.flush()
     print("Thread %s is running..." % threading.current_thread().name)
     sys.stdout.flush()
     try:
@@ -300,5 +311,10 @@ def sftp_proc(ip_list, username, password, version):
 if __name__ == '__main__':
     version = sys.argv[1]
     ip_list = sys.argv[2].replace(" ", "").split(",")
-    clear_cfg = sys.argv[3]
-    sftp_thread(ip_list, "admin", "admin1", version, clear_cfg)
+    username = sys.argv[3]
+    if username == "root":
+        password = "root"
+    else:
+        password = "admin1"
+    clear_cfg = sys.argv[4]
+    sftp_thread(ip_list, username, password, version, clear_cfg)
