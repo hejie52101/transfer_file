@@ -91,7 +91,7 @@ def ssh_stby(ip, username, password, ne_partition):
         elif re.findall(r"password:", rst_scp[-15:]):
             chan.send("admin1\n")
             time.sleep(1)
-        elif re.findall(r".*@.*#", rst_scp[-15]):
+        elif re.findall(r".*@.*#", rst_scp[-15:]):
             break
         time.sleep(1)
         if chan.recv_ready():
