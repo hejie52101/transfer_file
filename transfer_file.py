@@ -37,12 +37,12 @@ def wait_end(chan, mode="oper"):
         if re.findall(reg, result[-10:]):
             break
         else:
-            time.sleep(1)
+            time.sleep(0.3)
             if chan.recv_ready():
                 result += chan.recv(9999999).decode(errors='ignore')
     return chan, result
 
-def ssh_stby(ip, username, password, ne_partition, sha_val, clear_cfg):
+def ssh_stby(ip, username, password, ne_partition, current_partition, sha_val, clear_cfg):
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
@@ -130,6 +130,10 @@ def ssh_stby(ip, username, password, ne_partition, sha_val, clear_cfg):
     chan, shell = wait_end(chan, "shell")
     print("%s: login in stby info: -----> %s" % (threading.current_thread().name, shell))
     sys.stdout.flush()
+    chan.send("\nrm -rf /sdboot/" + ne_partition + "/*\n")
+    chan, rm_rst = wait_end(chan, "shell")
+    print("%s: Stby MCP deleted the slave partition file." % threading.current_thread().name)
+    sys.stdout.flush()
     print("%s: Begin to execute copy to stby card..." % threading.current_thread().name)
     sys.stdout.flush()
     if username == "root":
@@ -173,6 +177,10 @@ def ssh_stby(ip, username, password, ne_partition, sha_val, clear_cfg):
     chan, rst_sync = wait_end(chan, "shell")
     print("\033[0;32m%s: stby mcp sync success!\033[0m" % threading.current_thread().name)
     sys.stdout.flush()
+    chan.send('\nsed -i "s/' + current_partition + '/' + ne_partition + '/g" /sdboot/startup\n')
+    chan, rst_sed = wait_end(chan, "shell")
+    print("\033[0;32m%s: Stby MCP change master partition to %s!\033[0m" % (threading.current_thread().name, ne_partition))
+    sys.stdout.flush()
     # chan.send("sha256sum /sdboot/" + ne_partition + "/*.bin\n")
     # print("%s: stby mcp start to calculate checksum..." % threading.current_thread().name)
     # sys.stdout.flush()
@@ -190,10 +198,9 @@ def ssh_stby(ip, username, password, ne_partition, sha_val, clear_cfg):
     #     print("\033[0;31m%s: Clear the Stby MCP version file!\033[0m" % threading.current_thread().name)
     #     sys.stdout.flush()
     ssh.close()
-    return 1
 
 
-def sftp_transfer(ip, username, password, localfile, remotefile, ne_partition, del_ver):
+def sftp_transfer(ip, username, password, localfile, remotefile):
     try:
         t = paramiko.Transport(sock=(ip, 22))
         t.connect(username = username, password = password)
@@ -212,17 +219,10 @@ def sftp_transfer(ip, username, password, localfile, remotefile, ne_partition, d
         print("%s: There is not enough available free space for the version file." % threading.current_thread().name)
         sys.stdout.flush()
         t.close()
-        if del_ver == "false":
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh.connect(ip, 22, username, password)
-            stdin, stdout, stderr = ssh.exec_command("mv /sdboot/" + ne_partition + "/NPT.old " + remotefile)
-            stdout.read().decode(errors='ignore')
-            ssh.close()
         raise Exception("\033[0;35;43m%s: There is not enough available free space for the version file.\033[0m" % threading.current_thread().name)
     
 
-def sftp_func(ip, local_path, clear_cfg, del_ver, superuser):
+def sftp_func(ip, local_path, clear_cfg, superuser):
     '''
     upgrade one NE
     '''
@@ -296,18 +296,18 @@ def sftp_func(ip, local_path, clear_cfg, del_ver, superuser):
         chan.send("\nshow system bank|no-more\n")
         time.sleep(1)
         chan, partition = wait_end(chan)
-        ssh.close()
+        # ssh.close()
         print("%s: version info: -----> %s" % (threading.current_thread().name, rst_version))
         sys.stdout.flush()
         # print("%s: ne partition: -----> %s" % (threading.current_thread().name, partition))
         # sys.stdout.flush()
         if "Up-Partition" in partition:
-            ne_partition = "up"
-        elif "Down-Partition" in partition:
             ne_partition = "down"
+        elif "Down-Partition" in partition:
+            ne_partition = "up"
         else:
             raise Exception("\033[0;35;43m%s: Partition get failed, please check it by yourself.\033[0m" % threading.current_thread().name)
-        print("%s: ne partition: -----> %s" % (threading.current_thread().name, ne_partition))
+        print("%s: ne slave partition: -----> %s" % (threading.current_thread().name, ne_partition))
         sys.stdout.flush()
         if re.findall(r"Ne Type.*NPT-1800.*2\+0", rst_version):
             ne_type = "1800_2p0"
@@ -325,13 +325,14 @@ def sftp_func(ip, local_path, clear_cfg, del_ver, superuser):
             remotefile = "/sdboot/" + ne_partition + "/NPT" + ne_type + "_Emb.bin"
     else:
         stdin, stdout, stderr = ssh.exec_command("cat /sdboot/startup")
-        remotefile = re.findall(r"/.*\.bin", stdout.read().decode(errors='ignore'))[0]
-        if "up" in remotefile:
-            ne_partition = "up"
-        else:
+        startup = re.findall(r"/.*\.bin", stdout.read().decode(errors='ignore'))[0]
+        if "up" in startup:
             ne_partition = "down"
-        ne_type = re.findall(r"NPT(\w*)_", remotefile)[0]
-        localfile = glob.glob(local_path+"\\"+remotefile.split("/")[-1].split(".")[0]+"_?????.bin")[0]
+        else:
+            ne_partition = "up"
+        ne_type = re.findall(r"NPT(\w*)_", startup)[0]
+        remotefile = "/sdboot/" + ne_partition + "/NPT" + ne_type + "_Emb.bin"
+        localfile = glob.glob(local_path+"\\"+startup.split("/")[-1].split(".")[0]+"_?????.bin")[0]
 
     print("%s: ne_type: -----> %s" % (threading.current_thread().name, ne_type))
     sys.stdout.flush()
@@ -341,24 +342,12 @@ def sftp_func(ip, local_path, clear_cfg, del_ver, superuser):
     sys.stdout.flush()
 
     try:
-        ssh.connect(ip, 22, username, password)
-        if del_ver == "false":
-            print("%s: Save old version file..." % threading.current_thread().name)
-            sys.stdout.flush()
-            stdin, stdout, stderr = ssh.exec_command("mv " + remotefile + " /sdboot/" + ne_partition + "/NPT.old")
-            stdout.read().decode(errors='ignore')
-        else:
-            print("%s: Delete old version file..." % threading.current_thread().name)
-            sys.stdout.flush()
-            stdin, stdout, stderr = ssh.exec_command("rm -rf " + remotefile)
-            stdout.read().decode(errors='ignore')
-    except Exception as e:
-        raise Exception("\033[0;35;43m%s: Save/Delete old file SSH connect failed.\033[0m" % threading.current_thread().name)
-    
-    ssh.close()
-
-    try:
-        sftp_transfer(ip, username, password, localfile, remotefile, ne_partition, del_ver)
+        stdin, stdout, stderr = ssh.exec_command("rm -rf /sdboot/" + ne_partition + "/*")
+        rm_rst = stdout.read().decode(errors='ignore')
+        print("%s: Act MCP deleted the slave partition file." % threading.current_thread().name)
+        sys.stdout.flush()
+        ssh.close()
+        sftp_transfer(ip, username, password, localfile, remotefile)
     except Exception as e:
         raise e
 
@@ -393,30 +382,34 @@ def sftp_func(ip, local_path, clear_cfg, del_ver, superuser):
     if sha_val in checksum:
         print("\033[0;32m%s: checksum is OK\033[0m" % threading.current_thread().name)
         sys.stdout.flush()
-        if del_ver == "false":
-            stdin, stdout, stderr = ssh.exec_command("rm -f /sdboot/" + ne_partition + "/NPT.old")
-            stdout.read().decode(errors='ignore')
-            print("%s: Clear backup file!" % threading.current_thread().name)
-            sys.stdout.flush()
         ssh.close()
     else:
         print("\033[0;31m%s: checksum is wrong\033[0m" % threading.current_thread().name)
         sys.stdout.flush()
-        stdin, stdout, stderr = ssh.exec_command("mv /sdboot/" + ne_partition + "/NPT.old " + remotefile)
+        stdin, stdout, stderr = ssh.exec_command("rm -f " + remotefile)
         stdout.read().decode(errors='ignore')
         ssh.close()
         raise Exception("\033[0;35;43m%s: checksum is wrong\033[0m" % threading.current_thread().name)
     
+    if ne_partition == "down":
+        current_partition = "up"
+    else:
+        current_partition = "down"
+
     if ne_type != "1800_2p0":
         print("%s: Check the standby card..." % threading.current_thread().name)
         sys.stdout.flush()
-        ssh_stby(ip, username, password, ne_partition, sha_val, clear_cfg)
+        ssh_stby(ip, username, password, ne_partition, current_partition, sha_val, clear_cfg)
 
     try:
         ssh.connect(ip, 22, username, password)
     except Exception as e:
         raise Exception("\033[0;35;43m%s: Reset SSH connect failed.\033[0m" % threading.current_thread().name)
     chan = ssh.invoke_shell()
+    stdin, stdout, stderr = ssh.exec_command('sed -i "s/' + current_partition + '/' + ne_partition + '/g" /sdboot/startup')
+    stdout.read().decode(errors='ignore')
+    print("\033[0;32m%s: Act MCP change master partition to %s!\033[0m" % (threading.current_thread().name, ne_partition))
+    sys.stdout.flush()
     time.sleep(1)
     chan.recv(9999).decode(errors='ignore')
     if username == "root":
@@ -448,29 +441,28 @@ def sftp_func(ip, local_path, clear_cfg, del_ver, superuser):
     sys.stdout.flush()
 
 class my_thread(threading.Thread):
-    def __init__(self, ip, local_path, clear_cfg, del_ver, superuser):
+    def __init__(self, ip, local_path, clear_cfg, superuser):
         threading.Thread.__init__(self)
         self.name = "Thread_" + ip
         self.ip = ip
         self.local_path = local_path
         self.clear_cfg = clear_cfg
-        self.del_ver = del_ver
         self.superuser = superuser
         self.exitcode = 0
         self.exception = None
         self.exc_traceback = ''
     def run(self):
         try:
-            sftp_func(self.ip, self.local_path, self.clear_cfg, self.del_ver, self.superuser)
+            sftp_func(self.ip, self.local_path, self.clear_cfg, self.superuser)
         except Exception as e:
             self.exitcode = 1
             self.exc_traceback = ''.join(traceback.format_exception(*sys.exc_info()))
 
-def sftp_thread(ip_list, local_path, clear_cfg, del_ver, superuser):
+def sftp_thread(ip_list, local_path, clear_cfg, superuser):
     print("Thread %s is running..." % threading.current_thread().name)
     sys.stdout.flush()
     for ip in ip_list:
-        locals()["t_"+ip] = my_thread(ip, local_path, clear_cfg, del_ver, superuser)
+        locals()["t_"+ip] = my_thread(ip, local_path, clear_cfg, superuser)
         locals()["t_"+ip].start()
     for ip in ip_list:
         locals()["t_"+ip].join()
@@ -503,8 +495,7 @@ if __name__ == '__main__':
     # sys.stdout.flush()
     ip_list = sys.argv[2].replace(" ", "").split(",")
     clear_cfg = sys.argv[3]
-    del_ver = sys.argv[4]
-    superuser = sys.argv[5]
+    superuser = sys.argv[4]
     # version = "7.5.614"
     # ip_list = "200.200.121.123".replace(" ", "").split(",")
     # clear_cfg = "false"
@@ -564,7 +555,7 @@ if __name__ == '__main__':
     print("version path: " + version_dir)
     sys.stdout.flush()
     try:
-        sftp_thread(ip_list, version_dir, clear_cfg, del_ver, superuser)
+        sftp_thread(ip_list, version_dir, clear_cfg, superuser)
     except Exception as e:
         raise e
     
