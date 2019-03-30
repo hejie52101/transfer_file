@@ -24,15 +24,17 @@ Notes: Now they can not output logs in realtime
 def wait_end(chan, mode="oper"):
     result = ""
     if mode == "oper":
-        reg = r".*@.*>"
+        reg = r">"
     elif mode == "login":
         reg = r".*login:"
     elif mode == "bash":
         reg = r"bash.*#"
+    elif mode == "admin":
+        reg = r"\$"
     else:
-        reg = r".*@.*#"
+        reg = r"#"
     while True:
-        if re.findall(reg, result[-30:]):
+        if re.findall(reg, result[-10:]):
             break
         else:
             time.sleep(1)
@@ -40,7 +42,7 @@ def wait_end(chan, mode="oper"):
                 result += chan.recv(9999999).decode(errors='ignore')
     return chan, result
 
-def ssh_stby(ip, username, password, ne_partition, clear_cfg):
+def ssh_stby(ip, username, password, ne_partition, sha_val, clear_cfg):
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
@@ -63,17 +65,38 @@ def ssh_stby(ip, username, password, ne_partition, clear_cfg):
         chan, rst_chassis = wait_end(chan)
         print("%s: Chassis info: -----> %s" % (threading.current_thread().name, rst_chassis))
         sys.stdout.flush()
-        if re.findall("msb.*operational.*stby|xsb.*operational.*stby", rst_chassis):
-            act_mcp = "2"
-            chan.send("telnet 169.254.1.3\n")
-        elif re.findall("msa.*operational.*stby|xsa.*operational.*stby", rst_chassis):
+        chan.send("\nstart shell\n")
+        chan, rst_bash = wait_end(chan, "admin")
+        # print(rst_bash)
+        chan.send("su -\n")
+        chan, rst_shell = wait_end(chan, "shell")
+        # print(rst_shell)
+        chan.send("arp\n")
+        chan, rst_arp = wait_end(chan, "shell")
+        # print(rst_arp)
+        # re.findall("(192.168.1.[23]).*00:20:8f", rst_arp)
+        if re.findall(r"169\.254\.1\.2.*00:", rst_arp):
             act_mcp = "3"
             chan.send("telnet 169.254.1.2\n")
+        elif re.findall(r"169\.254\.1\.3.*00:", rst_arp):
+            act_mcp = "2"
+            chan.send("telnet 169.254.1.3\n")
         else:
             ssh.close()
-            print("%s: %s is not 1+1 mode." % (threading.current_thread().name, ip))
+            print("\033[0;36m%s: %s is not 1+1 mode.\033[0m" % (threading.current_thread().name, ip))
             sys.stdout.flush()
             return
+        # if re.findall("msb.*operational.*stby|xsb.*operational.*stby", rst_chassis):
+        #     act_mcp = "2"
+        #     chan.send("telnet 169.254.1.3\n")
+        # elif re.findall("msa.*operational.*stby|xsa.*operational.*stby", rst_chassis):
+        #     act_mcp = "3"
+        #     chan.send("telnet 169.254.1.2\n")
+        # else:
+        #     ssh.close()
+        #     print("\033[0;36m%s: %s can not find the stby card,  it should not be 1+1 mode.\033[0m" % (threading.current_thread().name, ip))
+        #     sys.stdout.flush()
+        #     return
     else:
         chan.send("lsh\n")
         chan, rst_lsh = wait_end(chan)
@@ -90,11 +113,9 @@ def ssh_stby(ip, username, password, ne_partition, clear_cfg):
         # re.findall("(192.168.1.[23]).*00:20:8f", rst_arp)
         if re.findall(r"169\.254\.1\.2.*00:", rst_arp):
             act_mcp = "3"
-            print(act_mcp)
             chan.send("telnet 169.254.1.2\n")
         elif re.findall(r"169\.254\.1\.3.*00:", rst_arp):
             act_mcp = "2"
-            print(act_mcp)
             chan.send("telnet 169.254.1.3\n")
         else:
             ssh.close()
@@ -134,7 +155,7 @@ def ssh_stby(ip, username, password, ne_partition, clear_cfg):
             else:
                 chan.send("sp&BAN42361\n")
             time.sleep(1)
-        elif re.findall(r".*@.*#", rst_scp[-30:]):
+        elif re.findall(r"#", rst_scp[-10:]):
             break
         time.sleep(1)
         if chan.recv_ready():
@@ -150,9 +171,25 @@ def ssh_stby(ip, username, password, ne_partition, clear_cfg):
     chan.send("\nsync\n")
     time.sleep(1)
     chan, rst_sync = wait_end(chan, "shell")
-    ssh.close()
     print("\033[0;32m%s: stby mcp sync success!\033[0m" % threading.current_thread().name)
     sys.stdout.flush()
+    # chan.send("sha256sum /sdboot/" + ne_partition + "/*.bin\n")
+    # print("%s: stby mcp start to calculate checksum..." % threading.current_thread().name)
+    # sys.stdout.flush()
+    # chan, sha_stby = wait_end(chan, "shell")
+    # print("%s: Stby MCP sha256sum: -----> %s" % (threading.current_thread().name, sha_stby))
+    # sys.stdout.flush()
+    # if sha_val in sha_stby:
+    #     print("\033[0;32m%s: Stby MCP checksum is OK\033[0m" % threading.current_thread().name)
+    #     sys.stdout.flush()
+    # else:
+    #     print("\033[0;31m%s: checksum is wrong\033[0m" % threading.current_thread().name)
+    #     sys.stdout.flush()
+    #     chan.send("rm -rf /sdboot/" + ne_partition + "/*\n")
+    #     chan, rst = wait_end(chan, "shell")
+    #     print("\033[0;31m%s: Clear the Stby MCP version file!\033[0m" % threading.current_thread().name)
+    #     sys.stdout.flush()
+    ssh.close()
     return 1
 
 
@@ -175,11 +212,12 @@ def sftp_transfer(ip, username, password, localfile, remotefile, ne_partition, d
         print("%s: There is not enough available free space for the version file." % threading.current_thread().name)
         sys.stdout.flush()
         t.close()
-        if del_ver == "true":
+        if del_ver == "false":
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             ssh.connect(ip, 22, username, password)
             stdin, stdout, stderr = ssh.exec_command("mv /sdboot/" + ne_partition + "/NPT.old " + remotefile)
+            stdout.read().decode(errors='ignore')
             ssh.close()
         raise Exception("\033[0;35;43m%s: There is not enough available free space for the version file.\033[0m" % threading.current_thread().name)
     
@@ -273,11 +311,17 @@ def sftp_func(ip, local_path, clear_cfg, del_ver, superuser):
         sys.stdout.flush()
         if re.findall(r"Ne Type.*NPT-1800.*2\+0", rst_version):
             ne_type = "1800_2p0"
-            localfile = os.path.join(local_path, re.findall(r"NPT1800_Emb_2p0_\d+\.bin", ", ".join(os.listdir(local_path)))[0])
+            try:
+                localfile = os.path.join(local_path, re.findall(r"NPT1800_Emb_2p0_\d+\.bin", ", ".join(os.listdir(local_path)))[0])
+            except:
+                raise Exception("\033[0;35;43m%s: The NPT-1800 2+0 version file can not be found. Please confirm the version file.\033[0m" % threading.current_thread().name)
             remotefile = "/sdboot/" + ne_partition + "/NPT1800_Emb.bin"
         else:
             ne_type = re.findall(r"Ne Type.*NPT-(\w*)", rst_version)[0]
-            localfile = os.path.join(local_path, re.findall("NPT"+ne_type+r"_Emb_\d+\.bin", ", ".join(os.listdir(local_path)))[0])
+            try:
+                localfile = os.path.join(local_path, re.findall("NPT"+ne_type+r"_Emb_\d+\.bin", ", ".join(os.listdir(local_path)))[0])
+            except:
+                raise Exception("\033[0;35;43m%s: The %s version file can not be found. Please confirm the version file.\033[0m" % (threading.current_thread().name, ne_type))
             remotefile = "/sdboot/" + ne_partition + "/NPT" + ne_type + "_Emb.bin"
     else:
         stdin, stdout, stderr = ssh.exec_command("cat /sdboot/startup")
@@ -302,10 +346,12 @@ def sftp_func(ip, local_path, clear_cfg, del_ver, superuser):
             print("%s: Save old version file..." % threading.current_thread().name)
             sys.stdout.flush()
             stdin, stdout, stderr = ssh.exec_command("mv " + remotefile + " /sdboot/" + ne_partition + "/NPT.old")
+            stdout.read().decode(errors='ignore')
         else:
             print("%s: Delete old version file..." % threading.current_thread().name)
             sys.stdout.flush()
             stdin, stdout, stderr = ssh.exec_command("rm -rf " + remotefile)
+            stdout.read().decode(errors='ignore')
     except Exception as e:
         raise Exception("\033[0;35;43m%s: Save/Delete old file SSH connect failed.\033[0m" % threading.current_thread().name)
     
@@ -334,29 +380,37 @@ def sftp_func(ip, local_path, clear_cfg, del_ver, superuser):
         shafile = localfile[:-9] + "1p1_sha256"
     else:
         shafile = localfile[:-9] + "sha256"
-    f = open(shafile)
-    sha_val = f.read()
-    f.close()
+
+    try:
+        f = open(shafile)
+        sha_val = f.read()
+        f.close()
+    except Exception as e:
+        raise Exception("\033[0;35;43m%s: Open local SHA file failed.\033[0m" % threading.current_thread().name)
+
     print("%s: local_sha256: -----> %s" % (threading.current_thread().name, sha_val))
     sys.stdout.flush()
     if sha_val in checksum:
         print("\033[0;32m%s: checksum is OK\033[0m" % threading.current_thread().name)
         sys.stdout.flush()
-        stdin, stdout, stderr = ssh.exec_command("rm -f /sdboot/" + ne_partition + "/NPT.old")
-        print("%s: Clear backup file!" % threading.current_thread().name)
-        sys.stdout.flush()
+        if del_ver == "false":
+            stdin, stdout, stderr = ssh.exec_command("rm -f /sdboot/" + ne_partition + "/NPT.old")
+            stdout.read().decode(errors='ignore')
+            print("%s: Clear backup file!" % threading.current_thread().name)
+            sys.stdout.flush()
         ssh.close()
     else:
         print("\033[0;31m%s: checksum is wrong\033[0m" % threading.current_thread().name)
         sys.stdout.flush()
         stdin, stdout, stderr = ssh.exec_command("mv /sdboot/" + ne_partition + "/NPT.old " + remotefile)
+        stdout.read().decode(errors='ignore')
         ssh.close()
         raise Exception("\033[0;35;43m%s: checksum is wrong\033[0m" % threading.current_thread().name)
     
     if ne_type != "1800_2p0":
         print("%s: Check the standby card..." % threading.current_thread().name)
         sys.stdout.flush()
-        ssh_stby(ip, username, password, ne_partition, clear_cfg)
+        ssh_stby(ip, username, password, ne_partition, sha_val, clear_cfg)
 
     try:
         ssh.connect(ip, 22, username, password)
@@ -390,7 +444,7 @@ def sftp_func(ip, local_path, clear_cfg, del_ver, superuser):
     print("%s: NE will reset: -----> %s" % (threading.current_thread().name, reset_rst))
     sys.stdout.flush()
     ssh.close()
-    print("%s: thread finished." % threading.current_thread().name)
+    print("\033[0;32m%s: thread finished.\033[0m" % threading.current_thread().name)
     sys.stdout.flush()
 
 class my_thread(threading.Thread):
@@ -445,6 +499,8 @@ def sftp_proc(ip_list, username, password, version):
 
 if __name__ == '__main__':
     version = sys.argv[1]
+    # print(version)
+    # sys.stdout.flush()
     ip_list = sys.argv[2].replace(" ", "").split(",")
     clear_cfg = sys.argv[3]
     del_ver = sys.argv[4]
@@ -454,7 +510,11 @@ if __name__ == '__main__':
     # clear_cfg = "false"
     # del_ver = "false"
     # superuser = "false"
-    if not re.findall("Netstore-", version):
+    if not version:
+        raise Exception("\033[0;35;43mThe version is blank, please type it!\033[0m")
+    if not "".join(ip_list):
+        raise Exception("\033[0;35;43mThe NE IP is blank, please type it!\033[0m")
+    if not re.findall(r"[nN]etstore|172\.18\.104\.44", version):
         vv = re.findall(r"(\d)\.(\d)\.(0\d\d)", version)
         temp = re.findall(r"(\d)\.(\d)\.([56]\d\d)", version)
         temp_cmcc = re.findall(r"(\d)\.(\d)\.(7\d\d)", version)
@@ -465,6 +525,8 @@ if __name__ == '__main__':
         # sys.stdout.flush()
         if vv:
             version_dir = os.path.join(r"\\Netstore-ch\r&d tn china\R&D_Server\Version Management\Dev_Version\Version to V&V\NPTI\V" + vv[0][0] + "." + vv[0][1], "V" + vv[0][0] + "." + vv[0][1] + "." + vv[0][2])
+            print(version_dir)
+            sys.stdout.flush()
         elif temp:
             version_dir = os.path.join(r"\\Netstore-ch\r&d tn china\R&D_Server\Version Management\Dev_Version\TempVersion\NPTI\V" + temp[0][0] + "." + temp[0][1], ".".join(temp[0]) + "*")
         elif temp_cmcc:
@@ -489,7 +551,6 @@ if __name__ == '__main__':
             version_dir = os.path.join(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\DailyVersion\V7.5-NPTI-CMCC", "".join(daily_cmcc_date[0]))
         else:
             raise Exception("\033[0;35;43mThe version is not found, please type again!\033[0m")
-        # print(version_dir)
         version_dir = glob.glob(version_dir)
         if version_dir:
             if os.stat(version_dir[0]).st_ctime > os.stat(version_dir[-1]).st_ctime:
@@ -498,6 +559,8 @@ if __name__ == '__main__':
                 version_dir = version_dir[-1]
         else:
             raise Exception("\033[0;35;43mThe version is not found, please type again!\033[0m")
+    else:
+        version_dir = version
     print("version path: " + version_dir)
     sys.stdout.flush()
     try:
