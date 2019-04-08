@@ -359,6 +359,11 @@ def sftp_func(ip, local_path, clear_cfg, superuser):
         chan, rst_shell = wait_end(chan, "shell")
         # stdin, stdout, stderr = ssh.exec_command("rm -rf /sdboot/" + ne_partition + "/*")
         # rm_rst = stdout.read().decode(errors='ignore')
+        chan.send("ls /sdboot/\n")
+        chan, rst_ls = wait_end(chan, "shell")
+        if ne_partition not in rst_ls:
+            chan.send("mkdir /sdboot/"+ ne_partition +"\n")
+            chan, rst_mkdir = wait_end(chan, "shell")
         chan.send("chmod 777 /sdboot/" + ne_partition + "/\n")
         chan, rst_shell = wait_end(chan, "shell")
         chan.send("rm -rf /sdboot/" + ne_partition + "/*\n")
