@@ -28,7 +28,7 @@ def wait_end(chan, mode="oper"):
     elif mode == "login":
         reg = r".*login:"
     elif mode == "bash":
-        reg = r"bash.*#"
+        reg = r"bash.*$"
     elif mode == "admin":
         reg = r"\$"
     else:
@@ -282,11 +282,10 @@ def sftp_func(ip, local_path, clear_cfg, superuser):
                 sys.stdout.flush()
             except:
                 raise Exception("\033[0;35;43m%s: Login failed. Please confirm the NE status.\033[0m" % threading.current_thread().name)
-
+    chan = ssh.invoke_shell()
+    time.sleep(1)
+    chan.recv(9999999).decode(errors='ignore')
     if username != "npti_sp":
-        chan = ssh.invoke_shell()
-        time.sleep(1)
-        chan.recv(9999999).decode(errors='ignore')
         if username == "root":
             chan.send("lsh\n")
             chan, rst_lsh = wait_end(chan)
@@ -342,8 +341,16 @@ def sftp_func(ip, local_path, clear_cfg, superuser):
     sys.stdout.flush()
 
     try:
-        stdin, stdout, stderr = ssh.exec_command("rm -rf /sdboot/" + ne_partition + "/*")
-        rm_rst = stdout.read().decode(errors='ignore')
+        chan.send("\nstart shell\n")
+        chan, rst_bash = wait_end(chan, "bash")
+        chan.send("su -\n")
+        chan, rst_shell = wait_end(chan, "shell")
+        # stdin, stdout, stderr = ssh.exec_command("rm -rf /sdboot/" + ne_partition + "/*")
+        # rm_rst = stdout.read().decode(errors='ignore')
+        chan.send("chmod 777 /sdboot/" + ne_partition + "/\n")
+        chan, rst_shell = wait_end(chan, "shell")
+        chan.send("rm -rf /sdboot/" + ne_partition + "/*\n")
+        chan, rst_shell = wait_end(chan, "shell")
         print("%s: Act MCP deleted the slave partition file." % threading.current_thread().name)
         sys.stdout.flush()
         ssh.close()
@@ -523,23 +530,23 @@ if __name__ == '__main__':
         elif temp_cmcc:
             version_dir = os.path.join(r"\\Netstore-ch\r&d tn china\R&D_Server\Version Management\Dev_Version\TempVersion\NPTI\V" + temp_cmcc[0][0] + "." + temp_cmcc[0][1] + "-CMCC", ".".join(temp_cmcc[0]) + "*")
         elif daily:
-            version_dir = os.path.join(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\DailyVersion\V7.5-NPTI\*", "NPT*" + "".join(daily[0]) + ".bin")
+            version_dir = os.path.join(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\DailyVersion\V*-NPTI\*", "NPT*" + "".join(daily[0]) + ".bin")
             file_test = glob.glob(version_dir)
             if file_test:
                 version_dir = os.path.dirname(file_test[0])
             else:
                 raise Exception("\033[0;35;43mThe version is not found, please type again!\033[0m")
         elif daily_cmcc:
-            version_dir = os.path.join(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\DailyVersion\V7.5-NPTI-CMCC\*", "NPT*" + "".join(daily_cmcc[0]) + ".bin")
+            version_dir = os.path.join(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\DailyVersion\V*-NPTI*\*", "NPT*" + "".join(daily_cmcc[0]) + ".bin")
             file_test = glob.glob(version_dir)
             if file_test:
                 version_dir = os.path.dirname(file_test[0])
             else:
                 raise Exception("\033[0;35;43mThe version is not found, please type again!\033[0m")
         elif daily_date:
-            version_dir = os.path.join(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\DailyVersion\V7.5-NPTI", daily_date[0])
+            version_dir = os.path.join(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\DailyVersion\*", daily_date[0])
         elif daily_cmcc_date:
-            version_dir = os.path.join(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\DailyVersion\V7.5-NPTI-CMCC", "".join(daily_cmcc_date[0]))
+            version_dir = os.path.join(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\DailyVersion\V*-NPTI*", "".join(daily_cmcc_date[0]))
         else:
             raise Exception("\033[0;35;43mThe version is not found, please type again!\033[0m")
         version_dir = glob.glob(version_dir)
