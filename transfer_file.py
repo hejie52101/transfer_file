@@ -28,7 +28,7 @@ def wait_end(chan, mode="oper"):
     elif mode == "login":
         reg = r".*login:"
     elif mode == "bash":
-        reg = r"bash.*\$"
+        reg = r"bash.*"
     elif mode == "admin":
         reg = r"\$"
     else:
