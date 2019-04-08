@@ -127,7 +127,19 @@ def ssh_stby(ip, username, password, ne_partition, current_partition, sha_val, c
     chan, login = wait_end(chan, "login")
     chan.send("root\n")
     time.sleep(1)
-    chan, shell = wait_end(chan, "shell")
+    result = ""
+    while True:
+        if re.findall(r"#", result[-10:]):
+            break
+        elif re.findall(r"Password:", result[-15:]):
+            print("\033[0;35;43m%s: login to stby card failed.\033[0m" % threading.current_thread().name)
+            sys.stdout.flush()
+            return
+        else:
+            time.sleep(0.3)
+            if chan.recv_ready():
+                result += chan.recv(9999999).decode(errors='ignore')
+    # chan, shell = wait_end(chan, "shell")
     print("%s: login in stby info: -----> %s" % (threading.current_thread().name, shell))
     sys.stdout.flush()
     chan.send("\nrm -rf /sdboot/" + ne_partition + "/*\n")
