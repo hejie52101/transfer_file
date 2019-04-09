@@ -132,6 +132,23 @@ def ssh_stby(ip, username, password, ne_partition, current_partition, sha_val, c
         if re.findall(r"#", result[-10:]):
             break
         elif re.findall(r"Password:", result[-15:]):
+            chan.send(chr(3))
+            chan, ctrl_rst = wait_end(chan, "shell")
+            chan.send("!telnet\n")
+            chan, login = wait_end(chan, "login")
+            chan.send("root\n")
+            time.sleep(2)
+            if chan.recv_ready():
+                login = chan.recv(9999999).decode(errors='ignore')
+                if "Password" in login:
+                    ssh.close()
+                elif "#" in login:
+                    result += login
+                    break
+                else:
+                    ssh.close()
+            else:
+                ssh.close()
             print("\033[0;35;43m%s: login to stby card failed.\033[0m" % threading.current_thread().name)
             sys.stdout.flush()
             return
@@ -140,7 +157,7 @@ def ssh_stby(ip, username, password, ne_partition, current_partition, sha_val, c
             if chan.recv_ready():
                 result += chan.recv(9999999).decode(errors='ignore')
     # chan, shell = wait_end(chan, "shell")
-    print("%s: login in stby info: -----> %s" % (threading.current_thread().name, shell))
+    print("%s: login in stby info: -----> %s" % (threading.current_thread().name, result))
     sys.stdout.flush()
     chan.send("\nrm -rf /sdboot/" + ne_partition + "/*\n")
     chan, rm_rst = wait_end(chan, "shell")
