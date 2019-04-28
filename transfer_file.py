@@ -201,12 +201,12 @@ def ssh_stby(ip, username, password, ne_partition, current_partition, sha_val, c
     sys.stdout.flush()
     print("%s: start to sync at stby mcp..." % threading.current_thread().name)
     sys.stdout.flush()
-    chan.send("\nsync\n")
+    chan.send("sync\n")
     time.sleep(1)
     chan, rst_sync = wait_end(chan, "shell")
     print("\033[0;32m%s: stby mcp sync success!\033[0m" % threading.current_thread().name)
     sys.stdout.flush()
-    chan.send('\nsed -i "s/' + current_partition + '/' + ne_partition + '/g" /sdboot/startup\n')
+    chan.send('sed -i "s/' + current_partition + '/' + ne_partition + '/g" /sdboot/startup\n')
     chan, rst_sed = wait_end(chan, "shell")
     print("\033[0;32m%s: Stby MCP change master partition to %s!\033[0m" % (threading.current_thread().name, ne_partition))
     sys.stdout.flush()
@@ -385,7 +385,9 @@ def sftp_func(ip, local_path, clear_cfg, superuser):
         chan, rst_shell = wait_end(chan, "shell")
         chan.send("rm -rf /sdboot/" + ne_partition + "/*\n")
         chan, rst_shell = wait_end(chan, "shell")
-        print("%s: Act MCP deleted the slave partition file." % threading.current_thread().name)
+        chan.send("ls -a /sdboot/" + ne_partition + "\n")
+        chan, rst_ls = wait_end(chan, "shell")
+        print("%s: Act MCP deleted the slave partition file. -----> %s" % (threading.current_thread().name, rst_ls))
         sys.stdout.flush()
         ssh.close()
         sftp_transfer(ip, username, password, localfile, remotefile)
@@ -557,50 +559,18 @@ if __name__ == '__main__':
     if not "".join(ip_list):
         raise Exception("\033[0;35;43mThe NE IP is blank, please type it!\033[0m")
     if not re.findall(r"[nN]etstore|172\.18\.104\.44", version):
-        vv = re.findall(r"(\d)\.(\d)\.(0\d\d)", version)
-        temp = re.findall(r"(\d)\.(\d)\.([56]\d\d)", version)
-        temp_cmcc = re.findall(r"(\d)\.(\d)\.(7\d\d)", version)
-        daily = re.findall(r"(\d)\.(\d)\.(8\d\d)", version) #V7.5.846
-        daily_cmcc = re.findall(r"(\d)\.(\d)\.(9\d\d)", version)
-        daily_date = re.findall(r"^\d{4}-\d{2}-\d{2}", version)
-        daily_cmcc_date = re.findall(r"^CMCC-(\d{4}-\d{2}-\d{2})", version)
-        # sys.stdout.flush()
-        if vv:
-            version_dir = os.path.join(r"\\Netstore-ch\r&d tn china\R&D_Server\Version Management\Dev_Version\Version to V&V\NPTI\V" + vv[0][0] + "." + vv[0][1], "V" + vv[0][0] + "." + vv[0][1] + "." + vv[0][2])
-            print(version_dir)
-            sys.stdout.flush()
-        elif temp:
-            version_dir = os.path.join(r"\\Netstore-ch\r&d tn china\R&D_Server\Version Management\Dev_Version\TempVersion\NPTI\V" + temp[0][0] + "." + temp[0][1], ".".join(temp[0]) + "*")
-        elif temp_cmcc:
-            version_dir = os.path.join(r"\\Netstore-ch\r&d tn china\R&D_Server\Version Management\Dev_Version\TempVersion\NPTI\V" + temp_cmcc[0][0] + "." + temp_cmcc[0][1] + "-CMCC", ".".join(temp_cmcc[0]) + "*")
-        elif daily:
-            version_dir = os.path.join(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\DailyVersion\V*-NPTI\*", "NPT*" + "".join(daily[0]) + ".bin")
-            file_test = glob.glob(version_dir)
-            if file_test:
-                version_dir = os.path.dirname(file_test[0])
+        version_dir = glob.glob(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\*\NPTI\*\*" + version + "*")
+        if not version_dir:
+            version_file = glob.glob(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\DailyVersion\*NPTI\*\*" + "".join(version.split(".")) + "*")
+            if version_file:
+                version_dir = os.path.dirname(version_file[0])
             else:
                 raise Exception("\033[0;35;43mThe version is not found, please type again!\033[0m")
-        elif daily_cmcc:
-            version_dir = os.path.join(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\DailyVersion\V*-NPTI*\*", "NPT*" + "".join(daily_cmcc[0]) + ".bin")
-            file_test = glob.glob(version_dir)
-            if file_test:
-                version_dir = os.path.dirname(file_test[0])
-            else:
-                raise Exception("\033[0;35;43mThe version is not found, please type again!\033[0m")
-        elif daily_date:
-            version_dir = os.path.join(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\DailyVersion\*", daily_date[0])
-        elif daily_cmcc_date:
-            version_dir = os.path.join(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\DailyVersion\V*-NPTI*", "".join(daily_cmcc_date[0]))
         else:
-            raise Exception("\033[0;35;43mThe version is not found, please type again!\033[0m")
-        version_dir = glob.glob(version_dir)
-        if version_dir:
             if os.stat(version_dir[0]).st_ctime > os.stat(version_dir[-1]).st_ctime:
                     version_dir = version_dir[0]
             else:
                 version_dir = version_dir[-1]
-        else:
-            raise Exception("\033[0;35;43mThe version is not found, please type again!\033[0m")
     else:
         version_dir = version
     print("version path: " + version_dir)
