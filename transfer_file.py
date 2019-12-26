@@ -1,4 +1,4 @@
-# coding: utf-8
+# -*- coding: utf-8 -*-
 import paramiko
 import os
 import time
@@ -21,7 +21,8 @@ sftp_proc and sftp_thread can upgrade multi-NE
 sftp_func can upgrade one NE
 Notes: Now they can not output logs in realtime
 '''
-def wait_end(chan, mode="oper"):
+def wait_end(chan, mode="oper", timeout = 1800):
+    start_time = time.time()
     result = ""
     if mode == "oper":
         reg = r">"
@@ -36,13 +37,18 @@ def wait_end(chan, mode="oper"):
     while True:
         if re.findall(reg, result[-10:]):
             break
+        elif time.time() - start_time > timeout:
+            result = "\033[0;35;43mTimeout===>\003[0m" + result
+            break
         else:
+            if re.findall("Password:|alarm|event", result[-15:]):
+                chan.send("\n")
             time.sleep(0.3)
             if chan.recv_ready():
                 result += chan.recv(9999999).decode(errors='ignore')
     return chan, result
 
-def ssh_stby(ip, username, password, ne_partition, current_partition, sha_val, clear_cfg):
+def ssh_stby(ip, username, password, ne_partition, current_partition, sha_val, upgrade_option):
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
@@ -71,6 +77,8 @@ def ssh_stby(ip, username, password, ne_partition, current_partition, sha_val, c
         chan.send("su -\n")
         chan, rst_shell = wait_end(chan, "shell")
         # print(rst_shell)
+        chan.send("kill `pidof in.telnetd`\n")
+        chan, rst_kill = wait_end(chan, "shell")
         chan.send("arp\n")
         chan, rst_arp = wait_end(chan, "shell")
         # print(rst_arp)
@@ -107,6 +115,8 @@ def ssh_stby(ip, username, password, ne_partition, current_partition, sha_val, c
         chan.send("su -\n")
         chan, rst_shell = wait_end(chan, "shell")
         # print(rst_shell)
+        chan.send("kill `pidof in.telnetd`\n")
+        chan, rst_kill = wait_end(chan, "shell")
         chan.send("arp\n")
         chan, rst_arp = wait_end(chan, "shell")
         # print(rst_arp)
@@ -159,57 +169,61 @@ def ssh_stby(ip, username, password, ne_partition, current_partition, sha_val, c
     # chan, shell = wait_end(chan, "shell")
     print("%s: login in stby info: -----> %s" % (threading.current_thread().name, result))
     sys.stdout.flush()
-    chan.send("\nrm -rf /sdboot/" + ne_partition + "/*\n")
-    chan, rm_rst = wait_end(chan, "shell")
-    print("%s: Stby MCP deleted the slave partition file." % threading.current_thread().name)
-    sys.stdout.flush()
-    print("%s: Begin to execute copy to stby card..." % threading.current_thread().name)
-    sys.stdout.flush()
-    if username == "root":
-        chan.send("\nscp 169.254.1." + act_mcp + ":/sdboot/" + ne_partition + "/NPT*.bin /sdboot/" + ne_partition + "\n")
-    elif username == "admin":
-        chan.send("\nscp admin@169.254.1." + act_mcp + ":/sdboot/" + ne_partition + "/NPT*.bin /sdboot/" + ne_partition + "\n")
-    else:
-        if clear_cfg == "true":
-            chan.send("\nrm -rf /sddata/mcu/config/*\n")
-            chan, rm_rst = wait_end(chan, "shell")
-        chan.send("\nscp npti_sp@169.254.1." + act_mcp + ":/sdboot/" + ne_partition + "/NPT*.bin /sdboot/" + ne_partition + "\n")
-    time.sleep(1)
-    rst_scp = ""
-    print("%s: Coping to stby version..." % threading.current_thread().name)
-    sys.stdout.flush()
-    while True:
-        if re.findall(r"\(yes/no\)", rst_scp[-30:]):
-            chan.send("yes\n")
-            time.sleep(1)
-        elif re.findall(r"password:", rst_scp[-30:]):
-            if username == "admin":
-                chan.send("admin1\n")
-            else:
-                chan.send("sp&BAN42361\n")
-            time.sleep(1)
-        elif re.findall(r"#", rst_scp[-10:]):
-            break
+    if upgrade_option != "only_switch_bank_and_reset":
+        chan.send("\nrm -rf /sdboot/" + ne_partition + "/*\n")
+        chan, rm_rst = wait_end(chan, "shell")
+        print("%s: Stby MCP deleted the slave partition file." % threading.current_thread().name)
+        sys.stdout.flush()
+        chan.send("\nrm -rf ~/.ssh\n")
+        chan, rmssh_rst = wait_end(chan, "shell")
+        print("%s: Begin to execute copy to stby card..." % threading.current_thread().name)
+        sys.stdout.flush()
+        if username == "root":
+            chan.send("\nscp 169.254.1." + act_mcp + ":/sdboot/" + ne_partition + "/NPT*.bin /sdboot/" + ne_partition + "\n")
+        elif username == "admin":
+            chan.send("\nscp admin@169.254.1." + act_mcp + ":/sdboot/" + ne_partition + "/NPT*.bin /sdboot/" + ne_partition + "\n")
+        else:
+            if upgrade_option == "reset_no_recovery":
+                chan.send("\nrm -rf /sddata/mcu/config/*\n")
+                chan, rm_rst = wait_end(chan, "shell")
+            chan.send("\nscp npti_sp@169.254.1." + act_mcp + ":/sdboot/" + ne_partition + "/NPT*.bin /sdboot/" + ne_partition + "\n")
         time.sleep(1)
-        if chan.recv_ready():
-            rst_scp = chan.recv(9999999).decode(errors='ignore')
-            print("%s: after scp: -----> %s" % (threading.current_thread().name, rst_scp))
-            sys.stdout.flush()
-    # print("%s: after scp: -----> %s" % (threading.current_thread().name, rst_scp))
-    sys.stdout.flush()
-    print("%s: Copy to stby card finish" % threading.current_thread().name)
-    sys.stdout.flush()
-    print("%s: start to sync at stby mcp..." % threading.current_thread().name)
-    sys.stdout.flush()
-    chan.send("sync\n")
-    time.sleep(1)
-    chan, rst_sync = wait_end(chan, "shell")
-    print("\033[0;32m%s: stby mcp sync success!\033[0m" % threading.current_thread().name)
-    sys.stdout.flush()
-    chan.send('sed -i "s/' + current_partition + '/' + ne_partition + '/g" /sdboot/startup\n')
-    chan, rst_sed = wait_end(chan, "shell")
-    print("\033[0;32m%s: Stby MCP change master partition to %s!\033[0m" % (threading.current_thread().name, ne_partition))
-    sys.stdout.flush()
+        rst_scp = ""
+        print("%s: Coping to stby version..." % threading.current_thread().name)
+        sys.stdout.flush()
+        while True:
+            if re.findall(r"\(yes/no\)", rst_scp[-30:]):
+                chan.send("yes\n")
+                time.sleep(1)
+            elif re.findall(r"password:", rst_scp[-30:]):
+                if username == "admin":
+                    chan.send("admin1\n")
+                else:
+                    chan.send("sp&BAN42361\n")
+                time.sleep(1)
+            elif re.findall(r"#", rst_scp[-10:]):
+                break
+            time.sleep(1)
+            if chan.recv_ready():
+                rst_scp = chan.recv(9999999).decode(errors='ignore')
+                print("%s: after scp: -----> %s" % (threading.current_thread().name, rst_scp))
+                sys.stdout.flush()
+        # print("%s: after scp: -----> %s" % (threading.current_thread().name, rst_scp))
+        sys.stdout.flush()
+        print("%s: Copy to stby card finish" % threading.current_thread().name)
+        sys.stdout.flush()
+        print("%s: start to sync at stby mcp..." % threading.current_thread().name)
+        sys.stdout.flush()
+        chan.send("sync\n")
+        time.sleep(1)
+        chan, rst_sync = wait_end(chan, "shell")
+        print("\033[0;32m%s: stby mcp sync success!\033[0m" % threading.current_thread().name)
+        sys.stdout.flush()
+    if upgrade_option == "reset_ne" or upgrade_option == "reset_no_recovery" or upgrade_option == "only_switch_bank_and_reset":
+        chan.send('sed -i "s/' + current_partition + '/' + ne_partition + '/g" /sdboot/startup\n')
+        chan, rst_sed = wait_end(chan, "shell")
+        print("\033[0;32m%s: Stby MCP change master partition to %s!\033[0m" % (threading.current_thread().name, ne_partition))
+        sys.stdout.flush()
     # chan.send("sha256sum /sdboot/" + ne_partition + "/*.bin\n")
     # print("%s: stby mcp start to calculate checksum..." % threading.current_thread().name)
     # sys.stdout.flush()
@@ -244,14 +258,44 @@ def sftp_transfer(ip, username, password, localfile, remotefile):
         print("%s: Transfer version file to act mcp finished!" % threading.current_thread().name)
         sys.stdout.flush()
         t.close()
+    except EOFError as e:
+        try:
+            print("%s: Try to transfer version file to act mcp again due to EOFError..." % threading.current_thread().name)
+            sys.stdout.flush()
+            t.close()
+            t = paramiko.Transport(sock=(ip, 22))
+            t.connect(username = username, password = password)
+            sftp_t = paramiko.SFTPClient.from_transport(t)
+            sftp_t.put(localfile, remotefile)
+            print("%s: Transfer version file to act mcp finished!" % threading.current_thread().name)
+            sys.stdout.flush()
+            t.close()
+        except:
+            t.close()
+            raise Exception("\033[0;35;43m%s: There is not enough available free space for the version file.\033[0m" % threading.current_thread().name)
+    except PermissionError as e:
+        try:
+            print("%s: Try to transfer version file to act mcp again due to PermissionError..." % threading.current_thread().name)
+            sys.stdout.flush()
+            t.close()
+            t = paramiko.Transport(sock=(ip, 22))
+            t.connect(username = username, password = password)
+            sftp_t = paramiko.SFTPClient.from_transport(t)
+            sftp_t.put(localfile, remotefile)
+            print("%s: Transfer version file to act mcp finished!" % threading.current_thread().name)
+            sys.stdout.flush()
+            t.close()
+        except:
+            t.close()
+            raise Exception("\033[0;35;43m%s: Please confirm the source version file is not used by another process.\033[0m" % threading.current_thread().name)
     except:
-        print("%s: There is not enough available free space for the version file." % threading.current_thread().name)
+        print("%s: There is something wrong when transftering the version file." % threading.current_thread().name)
         sys.stdout.flush()
         t.close()
-        raise Exception("\033[0;35;43m%s: There is not enough available free space for the version file.\033[0m" % threading.current_thread().name)
+        raise Exception("\033[0;35;43m%s: There is something wrong when transftering the version file.\033[0m" % threading.current_thread().name)
     
 
-def sftp_func(ip, local_path, clear_cfg, superuser):
+def sftp_func(ip, local_path, upgrade_option, superuser):
     '''
     upgrade one NE
     '''
@@ -261,8 +305,7 @@ def sftp_func(ip, local_path, clear_cfg, superuser):
     sys.stdout.flush()
     print("%s: Thread is running..." % threading.current_thread().name)
     sys.stdout.flush()
-    # local_path = r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\Version to V&V\NPTI\V7.0\V"
-    # local_path = os.path.join(local_path, version)
+    # local_path = r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\Version to V&V\NPTI\V7.6\V7.6.060"
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     if superuser == "false":
@@ -311,9 +354,11 @@ def sftp_func(ip, local_path, clear_cfg, superuser):
                 sys.stdout.flush()
             except:
                 raise Exception("\033[0;35;43m%s: Login failed. Please confirm the NE status.\033[0m" % threading.current_thread().name)
+
     chan = ssh.invoke_shell()
     time.sleep(1)
     chan.recv(9999999).decode(errors='ignore')
+    
     if username != "npti_sp":
         if username == "root":
             chan.send("lsh\n")
@@ -361,161 +406,169 @@ def sftp_func(ip, local_path, clear_cfg, superuser):
         ne_type = re.findall(r"NPT(\w*)_", startup)[0]
         remotefile = "/sdboot/" + ne_partition + "/NPT" + ne_type + "_Emb.bin"
         localfile = glob.glob(local_path+"\\"+startup.split("/")[-1].split(".")[0]+"_?????.bin")[0]
-
-    print("%s: ne_type: -----> %s" % (threading.current_thread().name, ne_type))
-    sys.stdout.flush()
-    print("\033[0;32m%s: localfile: -----> %s\033[0m" % (threading.current_thread().name, localfile))
-    sys.stdout.flush()
-    print("\033[0;32m%s: remotefile: -----> %s\033[0m" % (threading.current_thread().name, remotefile))
-    sys.stdout.flush()
-
-    try:
-        chan.send("\nstart shell\n")
-        chan, rst_bash = wait_end(chan, "bash")
-        chan.send("su -\n")
-        chan, rst_shell = wait_end(chan, "shell")
-        # stdin, stdout, stderr = ssh.exec_command("rm -rf /sdboot/" + ne_partition + "/*")
-        # rm_rst = stdout.read().decode(errors='ignore')
-        chan.send("ls /sdboot/\n")
-        chan, rst_ls = wait_end(chan, "shell")
-        if ne_partition not in rst_ls:
-            chan.send("mkdir /sdboot/"+ ne_partition +"\n")
-            chan, rst_mkdir = wait_end(chan, "shell")
-        chan.send("chmod 777 /sdboot/" + ne_partition + "/\n")
-        chan, rst_shell = wait_end(chan, "shell")
-        chan.send("rm -rf /sdboot/" + ne_partition + "/*\n")
-        chan, rst_shell = wait_end(chan, "shell")
-        chan.send("ls -a /sdboot/" + ne_partition + "\n")
-        chan, rst_ls = wait_end(chan, "shell")
-        print("%s: Act MCP deleted the slave partition file. -----> %s" % (threading.current_thread().name, rst_ls))
-        sys.stdout.flush()
-        ssh.close()
-        sftp_transfer(ip, username, password, localfile, remotefile)
-    except Exception as e:
-        raise e
-
-    try:
-        ssh.connect(ip, 22, username, password)
-        print("%s: start to sync at act mcp" % threading.current_thread().name)
-        sys.stdout.flush()
-        stdin, stdout, stderr = ssh.exec_command("sync")
-        print("\033[0;32m%s: act mcp sync success: -----> %s\033[0m" % (threading.current_thread().name, stdout.read().decode(errors='ignore')))
-        sys.stdout.flush()
-        stdin, stdout, stderr = ssh.exec_command("sha256sum " + remotefile)
-        checksum = stdout.read().decode(errors='ignore')
-        print("%s: sha256sum: -----> %s" % (threading.current_thread().name, checksum))
-        sys.stdout.flush()
-    except Exception as e:
-        raise Exception("\033[0;35;43m%s: Main sync SSH connect failed.\033[0m" % threading.current_thread().name)
-
-    if ne_type == "1800":
-        shafile = localfile[:-9] + "1p1_sha256"
-    else:
-        shafile = localfile[:-9] + "sha256"
-
-    try:
-        f = open(shafile)
-        sha_val = f.read()
-        f.close()
-    except Exception as e:
-        raise Exception("\033[0;35;43m%s: Open local SHA file failed.\033[0m" % threading.current_thread().name)
-
-    print("%s: local_sha256: -----> %s" % (threading.current_thread().name, sha_val))
-    sys.stdout.flush()
-    if sha_val in checksum:
-        print("\033[0;32m%s: checksum is OK\033[0m" % threading.current_thread().name)
-        sys.stdout.flush()
-        ssh.close()
-    else:
-        print("\033[0;31m%s: checksum is wrong\033[0m" % threading.current_thread().name)
-        sys.stdout.flush()
-        stdin, stdout, stderr = ssh.exec_command("rm -f " + remotefile)
-        stdout.read().decode(errors='ignore')
-        ssh.close()
-        raise Exception("\033[0;35;43m%s: checksum is wrong\033[0m" % threading.current_thread().name)
-    
     if ne_partition == "down":
         current_partition = "up"
     else:
         current_partition = "down"
 
-    if ne_type != "1800_2p0":
-        print("%s: Check the standby card..." % threading.current_thread().name)
+    if upgrade_option != "only_switch_bank_and_reset":
+        print("%s: ne_type: -----> %s" % (threading.current_thread().name, ne_type))
         sys.stdout.flush()
-        ssh_stby(ip, username, password, ne_partition, current_partition, sha_val, clear_cfg)
+        print("\033[0;32m%s: localfile: -----> %s\033[0m" % (threading.current_thread().name, localfile))
+        sys.stdout.flush()
+        print("\033[0;32m%s: remotefile: -----> %s\033[0m" % (threading.current_thread().name, remotefile))
+        sys.stdout.flush()
 
+        try:
+            chan.send("\nstart shell\n")
+            chan, rst_bash = wait_end(chan, "bash")
+            chan.send("su -\n")
+            chan, rst_shell = wait_end(chan, "shell")
+            # stdin, stdout, stderr = ssh.exec_command("rm -rf /sdboot/" + ne_partition + "/*")
+            # rm_rst = stdout.read().decode(errors='ignore')
+            chan.send("ls /sdboot/\n")
+            chan, rst_ls = wait_end(chan, "shell")
+            if ne_partition not in rst_ls:
+                chan.send("mkdir /sdboot/"+ ne_partition +"\n")
+                chan, rst_mkdir = wait_end(chan, "shell")
+            chan.send("chmod 777 /sdboot/" + ne_partition + "/\n")
+            chan, rst_shell = wait_end(chan, "shell")
+            chan.send("rm -rf /sdboot/" + ne_partition + "/*\n")
+            chan, rst_shell = wait_end(chan, "shell")
+            chan.send("ls -a /sdboot/" + ne_partition + "\n")
+            chan, rst_ls = wait_end(chan, "shell")
+            print("%s: Act MCP deleted the slave partition file. -----> %s" % (threading.current_thread().name, rst_ls))
+            sys.stdout.flush()
+            ssh.close()
+            sftp_transfer(ip, username, password, localfile, remotefile)
+        except Exception as e:
+            raise e
+
+        try:
+            ssh.connect(ip, 22, username, password)
+            print("%s: start to sync at act mcp" % threading.current_thread().name)
+            sys.stdout.flush()
+            stdin, stdout, stderr = ssh.exec_command("sync")
+            print("\033[0;32m%s: act mcp sync success: -----> %s\033[0m" % (threading.current_thread().name, stdout.read().decode(errors='ignore')))
+            sys.stdout.flush()
+            stdin, stdout, stderr = ssh.exec_command("sha256sum " + remotefile)
+            checksum = stdout.read().decode(errors='ignore')
+            print("%s: sha256sum: -----> %s" % (threading.current_thread().name, checksum))
+            sys.stdout.flush()
+        except Exception as e:
+            raise Exception("\033[0;35;43m%s: Main sync SSH connect failed.\033[0m" % threading.current_thread().name)
+
+        if ne_type == "1800":
+            shafile = localfile[:-9] + "1p1_sha256"
+        else:
+            shafile = localfile[:-9] + "sha256"
+
+        try:
+            f = open(shafile)
+            sha_val = f.read()
+            f.close()
+        except Exception as e:
+            raise Exception("\033[0;35;43m%s: Open local SHA file failed.\033[0m" % threading.current_thread().name)
+
+        print("%s: local_sha256: -----> %s" % (threading.current_thread().name, sha_val))
+        sys.stdout.flush()
+        if sha_val in checksum:
+            print("\033[0;32m%s: checksum is OK\033[0m" % threading.current_thread().name)
+            sys.stdout.flush()
+            ssh.close()
+        else:
+            print("\033[0;31m%s: checksum is wrong\033[0m" % threading.current_thread().name)
+            sys.stdout.flush()
+            stdin, stdout, stderr = ssh.exec_command("rm -f " + remotefile)
+            stdout.read().decode(errors='ignore')
+            ssh.close()
+            raise Exception("\033[0;35;43m%s: checksum is wrong\033[0m" % threading.current_thread().name)
+
+        if ne_type != "1800_2p0":
+            print("%s: Check the standby card..." % threading.current_thread().name)
+            sys.stdout.flush()
+            ssh_stby(ip, username, password, ne_partition, current_partition, sha_val, upgrade_option)
     try:
         ssh.connect(ip, 22, username, password)
     except Exception as e:
         raise Exception("\033[0;35;43m%s: Reset SSH connect failed.\033[0m" % threading.current_thread().name)
     chan = ssh.invoke_shell()
-    chan.send("\nstart shell\n")
-    chan, rst_bash = wait_end(chan, "bash")
-    chan.send("su -\n")
-    chan, rst_shell = wait_end(chan, "shell")
-    chan.send('sed -i "s/' + current_partition + '/' + ne_partition + '/g" /sdboot/startup\n')
-    chan, rst_shell = wait_end(chan, "shell")
-    # stdin, stdout, stderr = ssh.exec_command('sed -i "s/' + current_partition + '/' + ne_partition + '/g" /sdboot/startup')
-    # stdout.read().decode(errors='ignore')
-    print("\033[0;32m%s: Act MCP change master partition to %s!\033[0m" % (threading.current_thread().name, ne_partition))
-    sys.stdout.flush()
-    chan.send("exit\n")
-    chan, rst_bash = wait_end(chan, "bash")
-    chan.send("exit\n")
-    chan, rst_bash = wait_end(chan)
-    # time.sleep(1)
-    # chan.recv(9999).decode(errors='ignore')
     if username == "root":
-        chan.send("lsh\n")
-        chan, rst_lsh = wait_end(chan)
-        # print(rst_lsh)
-    if clear_cfg == "false":
-        chan.send("\nrequest reset ne\n")
-    else:
-        chan.send("\nrequest reset no-recovery-sdh\n")
-    reset_rst = ""
-    while True:
-        if re.findall(r"\(no\)", reset_rst[-30:]):
-            # 执行复位操作
-            chan.send("yes\n")
-            time.sleep(1)
-            break
+            chan.send("lsh\n")
+            chan, rst_lsh = wait_end(chan)
+    if upgrade_option != "no_reset" and upgrade_option != "activate_version":
+        chan.send("\nstart shell\n")
+        chan, rst_bash = wait_end(chan, "bash")
+        chan.send("su -\n")
+        chan, rst_shell = wait_end(chan, "shell")
+        chan.send('sed -i "s/' + current_partition + '/' + ne_partition + '/g" /sdboot/startup\n')
+        chan, rst_shell = wait_end(chan, "shell")
+        # stdin, stdout, stderr = ssh.exec_command('sed -i "s/' + current_partition + '/' + ne_partition + '/g" /sdboot/startup')
+        # stdout.read().decode(errors='ignore')
+        print("\033[0;32m%s: Act MCP change master partition to %s!\033[0m" % (threading.current_thread().name, ne_partition))
+        sys.stdout.flush()
+        chan.send("exit\n")
+        chan, rst_bash = wait_end(chan, "bash")
+        chan.send("exit\n")
+        chan, rst_bash = wait_end(chan)
+        # time.sleep(1)
+        # chan.recv(9999).decode(errors='ignore')
+    if upgrade_option != "no_reset":
+        if upgrade_option == "activate_version":
+            new_version = re.findall(r"V\d\.\d\.\d{3}", local_path.split("\\")[-1])[0]
+            chan.send("\nrequest system software launch version " + new_version + "\n")
+            chan, rst_upgrade = wait_end(chan)
+            print("%s: The stby MCP will be reset firstly: -----> %s" % (threading.current_thread().name, rst_upgrade))
         else:
+            if upgrade_option == "reset_no_recovery":
+                chan.send("\nrequest reset no-recovery-sdh\n")
+            else:
+                chan.send("\nrequest reset ne\n")
+            rst_reset = ""
+            while True:
+                if re.findall(r"\(no\)", rst_reset[-30:]):
+                    # 执行复位操作
+                    chan.send("yes\n")
+                    time.sleep(1)
+                    break
+                else:
+                    time.sleep(1)
+                    if chan.recv_ready():
+                        rst_reset += chan.recv(9999999).decode(errors='ignore')
             time.sleep(1)
             if chan.recv_ready():
-                reset_rst += chan.recv(9999999).decode(errors='ignore')
-    time.sleep(1)
-    if chan.recv_ready():
-        reset_rst += chan.recv(9999).decode(errors='ignore')
-    print("%s: NE will reset: -----> %s" % (threading.current_thread().name, reset_rst))
+                rst_reset += chan.recv(9999).decode(errors='ignore')
+            print("%s: NE will reset: -----> %s" % (threading.current_thread().name, rst_reset))
+    else:
+        print("\033[0;32mNow, You can do NE reset manually.\033[0m")
     sys.stdout.flush()
     ssh.close()
     print("\033[0;32m%s: thread finished.\033[0m" % threading.current_thread().name)
     sys.stdout.flush()
 
 class my_thread(threading.Thread):
-    def __init__(self, ip, local_path, clear_cfg, superuser):
+    def __init__(self, ip, local_path, upgrade_option, superuser):
         threading.Thread.__init__(self)
         self.name = "Thread_" + ip
         self.ip = ip
         self.local_path = local_path
-        self.clear_cfg = clear_cfg
+        self.upgrade_option = upgrade_option
         self.superuser = superuser
         self.exitcode = 0
         self.exception = None
         self.exc_traceback = ''
     def run(self):
         try:
-            sftp_func(self.ip, self.local_path, self.clear_cfg, self.superuser)
+            sftp_func(self.ip, self.local_path, self.upgrade_option, self.superuser)
         except Exception as e:
             self.exitcode = 1
             self.exc_traceback = ''.join(traceback.format_exception(*sys.exc_info()))
 
-def sftp_thread(ip_list, local_path, clear_cfg, superuser):
+def sftp_thread(ip_list, local_path, upgrade_option, superuser):
     print("Thread %s is running..." % threading.current_thread().name)
     sys.stdout.flush()
     for ip in ip_list:
-        locals()["t_"+ip] = my_thread(ip, local_path, clear_cfg, superuser)
+        locals()["t_"+ip] = my_thread(ip, local_path, upgrade_option, superuser)
         locals()["t_"+ip].start()
     for ip in ip_list:
         locals()["t_"+ip].join()
@@ -524,34 +577,37 @@ def sftp_thread(ip_list, local_path, clear_cfg, superuser):
             raise Exception(locals()["t_"+ip].exc_traceback)
     print("Thread %s ended." % threading.current_thread().name)
     sys.stdout.flush()
-def sftp_proc(ip_list, username, password, version):
-    print("Parent process %s is running..." % os.getpid())
-    sys.stdout.flush()
-    for ip in ip_list:
-        locals()["p_"+ip]=Process(target=sftp_func, args=(ip, username, password, version))
-        locals()["p_"+ip].start()
-    for ip in ip_list:
-        locals()["p_"+ip].join()
-    # p = Pool(len(ip_list))
-    # for ip in ip_list:
-    #     p.apply_async(sftp_func, args=(ip, username, password, version))
-    # print("%s: Waiting for all subprocesses done..." % os.getpid())
-    sys.stdout.flush()
-    # p.close()
-    p.join()
-    print("%s: All subprocesses done." % os.getpid())
-    sys.stdout.flush()
+# def sftp_proc(ip_list, username, password, version):
+#     print("Parent process %s is running..." % os.getpid())
+#     sys.stdout.flush()
+#     for ip in ip_list:
+#         locals()["p_"+ip]=Process(target=sftp_func, args=(ip, username, password, version))
+#         locals()["p_"+ip].start()
+#     for ip in ip_list:
+#         locals()["p_"+ip].join()
+#     # p = Pool(len(ip_list))
+#     # for ip in ip_list:
+#     #     p.apply_async(sftp_func, args=(ip, username, password, version))
+#     # print("%s: Waiting for all subprocesses done..." % os.getpid())
+#     sys.stdout.flush()
+#     # p.close()
+#     p.join()
+#     print("%s: All subprocesses done." % os.getpid())
+#     sys.stdout.flush()
 
 if __name__ == '__main__':
     version = sys.argv[1]
     # print(version)
     # sys.stdout.flush()
     ip_list = sys.argv[2].replace(" ", "").split(",")
-    clear_cfg = sys.argv[3]
+    # upgrade_option = sys.argv[3]
+    upgrade_option = sys.argv[3]
     superuser = sys.argv[4]
+    # ne_reset = sys.argv[5]
+    # only_reset = sys.argv[6]
     # version = "7.5.614"
     # ip_list = "200.200.121.123".replace(" ", "").split(",")
-    # clear_cfg = "false"
+    # upgrade_option = "false"
     # del_ver = "false"
     # superuser = "false"
     if not version:
@@ -561,7 +617,7 @@ if __name__ == '__main__':
     if not re.findall(r"[nN]etstore|172\.18\.104\.44", version):
         version_dir = glob.glob(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\*\NPTI\*\*" + version + "*")
         if not version_dir:
-            version_file = glob.glob(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\DailyVersion\*NPTI\*\*" + "".join(version.split(".")) + "*")
+            version_file = glob.glob(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\DailyVersion\*\*\*" + "".join(version.split(".")) + ".bin*")
             if version_file:
                 version_dir = os.path.dirname(version_file[0])
             else:
@@ -576,7 +632,7 @@ if __name__ == '__main__':
     print("version path: " + version_dir)
     sys.stdout.flush()
     try:
-        sftp_thread(ip_list, version_dir, clear_cfg, superuser)
+        sftp_thread(ip_list, version_dir, upgrade_option, superuser)
     except Exception as e:
         raise e
     
