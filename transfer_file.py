@@ -48,7 +48,7 @@ def wait_end(chan, mode="oper", timeout = 1800):
                 result += chan.recv(9999999).decode(errors='ignore')
     return chan, result
 
-def ssh_stby(ip, username, password, ne_partition, current_partition, sha_val, upgrade_option):
+def ssh_stby(ip, username, password, ne_partition, current_partition, sha_val, upgrade_option, ne_type):
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
@@ -169,6 +169,9 @@ def ssh_stby(ip, username, password, ne_partition, current_partition, sha_val, u
     # chan, shell = wait_end(chan, "shell")
     print("%s: login in stby info: -----> %s" % (threading.current_thread().name, result))
     sys.stdout.flush()
+    # if ne_type == "1800":
+    #     chan.send("\nrm -f /sdlog/FanControlIgnor2T\n")
+    #     chan, rst_fan= wait_end(chan, "shell")
     if upgrade_option != "only_switch_bank_and_reset":
         chan.send("\nrm -rf /sdboot/" + ne_partition + "/*\n")
         chan, rm_rst = wait_end(chan, "shell")
@@ -192,7 +195,7 @@ def ssh_stby(ip, username, password, ne_partition, current_partition, sha_val, u
         print("%s: Coping to stby version..." % threading.current_thread().name)
         sys.stdout.flush()
         while True:
-            if re.findall(r"\(yes/no\)", rst_scp[-30:]):
+            if re.findall(r"\(yes/no", rst_scp[-35:]):
                 chan.send("yes\n")
                 time.sleep(1)
             elif re.findall(r"password:", rst_scp[-30:]):
@@ -273,6 +276,21 @@ def sftp_transfer(ip, username, password, localfile, remotefile):
         except:
             t.close()
             raise Exception("\033[0;35;43m%s: There is not enough available free space for the version file.\033[0m" % threading.current_thread().name)
+    except OSError as e:
+        try:
+            print("%s: Try to transfer version file to act mcp again due to OSError..." % threading.current_thread().name)
+            sys.stdout.flush()
+            t.close()
+            t = paramiko.Transport(sock=(ip, 22))
+            t.connect(username = username, password = password)
+            sftp_t = paramiko.SFTPClient.from_transport(t)
+            sftp_t.put(localfile, remotefile)
+            print("%s: Transfer version file to act mcp finished!" % threading.current_thread().name)
+            sys.stdout.flush()
+            t.close()
+        except:
+            t.close()
+            raise Exception("\033[0;35;43m%s: There is something wrong when transfering the version file, you can try again.\033[0m" % threading.current_thread().name)
     except PermissionError as e:
         try:
             print("%s: Try to transfer version file to act mcp again due to PermissionError..." % threading.current_thread().name)
@@ -292,7 +310,7 @@ def sftp_transfer(ip, username, password, localfile, remotefile):
         print("%s: There is something wrong when transftering the version file." % threading.current_thread().name)
         sys.stdout.flush()
         t.close()
-        raise Exception("\033[0;35;43m%s: There is something wrong when transftering the version file.\033[0m" % threading.current_thread().name)
+        raise Exception("\033[0;35;43m%s: There is something wrong when transfering the version file.\033[0m" % threading.current_thread().name)
     
 
 def sftp_func(ip, local_path, upgrade_option, superuser):
@@ -393,6 +411,8 @@ def sftp_func(ip, local_path, upgrade_option, superuser):
             ne_type = re.findall(r"Ne Type.*NPT-(\w*)", rst_version)[0]
             try:
                 localfile = os.path.join(local_path, re.findall("NPT"+ne_type+r"_Emb_\d+\.bin", ", ".join(os.listdir(local_path)))[0])
+            except PermissionError:
+                raise Exception("\033[0;35;43m%s: The access is denied, please change the password for serive user.\033[0m" % (threading.current_thread().name, ne_type))
             except:
                 raise Exception("\033[0;35;43m%s: The %s version file can not be found. Please confirm the version file.\033[0m" % (threading.current_thread().name, ne_type))
             remotefile = "/sdboot/" + ne_partition + "/NPT" + ne_type + "_Emb.bin"
@@ -405,7 +425,8 @@ def sftp_func(ip, local_path, upgrade_option, superuser):
             ne_partition = "up"
         ne_type = re.findall(r"NPT(\w*)_", startup)[0]
         remotefile = "/sdboot/" + ne_partition + "/NPT" + ne_type + "_Emb.bin"
-        localfile = glob.glob(local_path+"\\"+startup.split("/")[-1].split(".")[0]+"_?????.bin")[0]
+        # First is 2p0, second is 1p1.
+        localfile = glob.glob(local_path+"\\"+startup.split("/")[-1].split(".")[0]+"_*.bin")[-1]
     if ne_partition == "down":
         current_partition = "up"
     else:
@@ -426,6 +447,9 @@ def sftp_func(ip, local_path, upgrade_option, superuser):
             chan, rst_shell = wait_end(chan, "shell")
             # stdin, stdout, stderr = ssh.exec_command("rm -rf /sdboot/" + ne_partition + "/*")
             # rm_rst = stdout.read().decode(errors='ignore')
+            # if ne_type == "1800" or ne_type == "1800_2p0":
+            #     chan.send("rm -f /sdlog/FanControlIgnor2T\n")
+            #     chan, rst_fan= wait_end(chan, "shell")
             chan.send("ls /sdboot/\n")
             chan, rst_ls = wait_end(chan, "shell")
             if ne_partition not in rst_ls:
@@ -458,11 +482,16 @@ def sftp_func(ip, local_path, upgrade_option, superuser):
         except Exception as e:
             raise Exception("\033[0;35;43m%s: Main sync SSH connect failed.\033[0m" % threading.current_thread().name)
 
+        # if ne_type == "1800":
+        #     shafile = localfile[:-9] + "1p1_sha256"
+        # else:
+        #     shafile = localfile[:-9] + "sha256"
         if ne_type == "1800":
-            shafile = localfile[:-9] + "1p1_sha256"
+            shafile = os.path.join(local_path, "NPT1800_Emb_1p1_sha256")
+        elif ne_type == "1800_2p0":
+            shafile = os.path.join(local_path, "NPT1800_Emb_2p0_sha256")
         else:
-            shafile = localfile[:-9] + "sha256"
-
+            shafile = os.path.join(local_path, "NPT" + ne_type + "_Emb_sha256")
         try:
             f = open(shafile)
             sha_val = f.read()
@@ -484,10 +513,10 @@ def sftp_func(ip, local_path, upgrade_option, superuser):
             ssh.close()
             raise Exception("\033[0;35;43m%s: checksum is wrong\033[0m" % threading.current_thread().name)
 
-        if ne_type != "1800_2p0":
-            print("%s: Check the standby card..." % threading.current_thread().name)
-            sys.stdout.flush()
-            ssh_stby(ip, username, password, ne_partition, current_partition, sha_val, upgrade_option)
+    if ne_type != "1800_2p0":
+        print("%s: Check the standby card..." % threading.current_thread().name)
+        sys.stdout.flush()
+        ssh_stby(ip, username, password, ne_partition, current_partition, sha_val, upgrade_option, ne_type)
     try:
         ssh.connect(ip, 22, username, password)
     except Exception as e:
@@ -515,8 +544,11 @@ def sftp_func(ip, local_path, upgrade_option, superuser):
         # chan.recv(9999).decode(errors='ignore')
     if upgrade_option != "no_reset":
         if upgrade_option == "activate_version":
-            new_version = re.findall(r"V\d\.\d\.\d{3}", local_path.split("\\")[-1])[0]
+            # new_version = re.findall(r"V\d\.\d\.\d*", local_path.split("\\")[-1])[0]
+            ver = re.findall(r"_(\d)(\d)(\d+)",localfile.split('\\')[-1])[0]
+            new_version = 'V' + ver[0] + '.' + ver[1] + '.' + ver[2]
             chan.send("\nrequest system software launch version " + new_version + "\n")
+            time.sleep(5)
             chan, rst_upgrade = wait_end(chan)
             print("%s: The stby MCP will be reset firstly: -----> %s" % (threading.current_thread().name, rst_upgrade))
         else:
@@ -597,9 +629,11 @@ def sftp_thread(ip_list, local_path, upgrade_option, superuser):
 
 if __name__ == '__main__':
     version = sys.argv[1]
+    if version[0] == 'V' or version[0] == 'v':
+        version = version.replace('V', '').replace('v', '')
     # print(version)
     # sys.stdout.flush()
-    ip_list = sys.argv[2].replace(" ", "").split(",")
+    ip_list = sys.argv[2].replace(" ", "").replace('，', ',').split(",")
     # upgrade_option = sys.argv[3]
     upgrade_option = sys.argv[3]
     superuser = sys.argv[4]
@@ -615,18 +649,21 @@ if __name__ == '__main__':
     if not "".join(ip_list):
         raise Exception("\033[0;35;43mThe NE IP is blank, please type it!\033[0m")
     if not re.findall(r"[nN]etstore|172\.18\.104\.44", version):
-        version_dir = glob.glob(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\*\NPTI\*\*" + version + "*")
+        # Version to V&V
+        version_dir = glob.glob(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\Version to V&V\NPTI\*\V" + version + "*")
         if not version_dir:
+            version_dir = glob.glob(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\TempVersion\NPTI\*\\" + version + "*")
+        if version_dir:
+            if os.stat(version_dir[0]).st_ctime > os.stat(version_dir[-1]).st_ctime:
+                version_dir = version_dir[0]
+            else:
+                version_dir = version_dir[-1]
+        else:
             version_file = glob.glob(r"\\netstore-ch\R&D TN China\R&D_Server\Version Management\Dev_Version\DailyVersion\*\*\*" + "".join(version.split(".")) + ".bin*")
             if version_file:
                 version_dir = os.path.dirname(version_file[0])
             else:
                 raise Exception("\033[0;35;43mThe version is not found, please type again!\033[0m")
-        else:
-            if os.stat(version_dir[0]).st_ctime > os.stat(version_dir[-1]).st_ctime:
-                    version_dir = version_dir[0]
-            else:
-                version_dir = version_dir[-1]
     else:
         version_dir = version
     print("version path: " + version_dir)
